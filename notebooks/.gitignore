@@ -1,0 +1,7 @@
+env.yml
+Replays/
+*.osr
+*.7z
+*.pkl
+*.pth
+*.onnx
