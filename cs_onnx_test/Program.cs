@@ -19,18 +19,24 @@ class Program
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
         };
 
-        using var session = new InferenceSession("../dilated3_ar5steps.onnx", options);
+        // using var session = new InferenceSession("../notebooks/aaaaa.onnx", options);
+        using var session = new InferenceSession("../notebooks/dilated3_ar5steps.onnx", options);
+
 
         // Create zeros of shape [1, 2, 65]
         var data = new float[504];
         var shape = new long[3] { 1, 2, 252 };
+        // var shape = new long[3] { 1, 2, 249 };
 
         // data[250] = -0.05f;
         // data[502] = 0.05f;
         // data[251] = -0.1f;
         // data[503] = 0.1f;
-        data[251] = 1f;
-        data[503] = 1f;
+        data[247] = 0.5f;
+        data[248] = 0.3f;
+        data[495] = -0.1f;
+        data[496] = -0.5f;
+        data[497] = -0.6f;
 
         using var ortInput = OrtValue.CreateTensorValueFromMemory(data, shape);
 

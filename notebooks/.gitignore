@@ -3,5 +3,7 @@ Replays/
 *.osr
 *.7z
 *.pkl
+*.pt
 *.pth
 *.onnx
+*.sarif
