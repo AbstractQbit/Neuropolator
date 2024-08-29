@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Numerics;
-// using System.Numerics.Tensors;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenTabletDriver.Plugin;
@@ -11,7 +10,7 @@ using OpenTabletDriver.Plugin.Output;
 using OpenTabletDriver.Plugin.Tablet;
 using OpenTabletDriver.Plugin.Timing;
 
-namespace cs_onnx_test;
+namespace Neuropolator;
 
 public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposable
 {
