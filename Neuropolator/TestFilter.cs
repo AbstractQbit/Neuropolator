@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Numerics;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using NumSharp;
 using OpenTabletDriver.Plugin;
 using OpenTabletDriver.Plugin.Attributes;
 using OpenTabletDriver.Plugin.Logging;
@@ -37,10 +38,11 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
     private static readonly int[] in_shape = ort_session.InputMetadata[inputName].Dimensions;
     private static readonly long[] in_shape_long = in_shape.Select(x => (long)x).ToArray();
     private static int in_ctx = in_shape[2];
-    private static int out_steps = ort_session.OutputMetadata[outputName].Dimensions[2];
+    private static readonly int[] out_shape = ort_session.OutputMetadata[outputName].Dimensions;
+    private static int out_steps = out_shape[2];
     private static readonly RunOptions runOptions = new RunOptions();
 
-    private DenseTensor<float> DeltasHist = new(in_shape, reverseStride: false);
+    private NDArray DeltasHist = np.zeros(in_shape, np.float32);
     private Vector2 previousPosition = Vector2.Zero;
     private HPETDeltaStopwatch reportStopwatch = new HPETDeltaStopwatch();
 
@@ -57,35 +59,31 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
             // Reset logic
             if (reportStopwatch.Restart().TotalMilliseconds > 50)
             {
-                DeltasHist = new DenseTensor<float>(in_shape, reverseStride: false);
+                DeltasHist = np.zeros(in_shape, np.float32);
                 previousPosition = report.Position;
             }
 
             var delta = (report.Position - previousPosition) * scale;
             previousPosition = report.Position;
 
-            // Roll tensor along L
-            foreach (int l in Enumerable.Range(0, in_ctx - 1))
-            {
-                DeltasHist[0, 0, l] = DeltasHist[0, 0, l + 1];
-                DeltasHist[0, 1, l] = DeltasHist[0, 1, l + 1];
-            }
-
+            DeltasHist = DeltasHist.roll(-1, axis: 2);
             DeltasHist[0, 0, in_ctx - 1] = delta.X;
             DeltasHist[0, 1, in_ctx - 1] = delta.Y;
 
             // Run inference
-            using var ortInput = OrtValue.CreateTensorValueFromMemory(DeltasHist.ToArray(), in_shape_long);
+            using var ortInput = OrtValue.CreateTensorValueFromMemory(DeltasHist.ToArray<float>(), in_shape_long);
 
             using var results = ort_session.Run(runOptions, new Dictionary<string, OrtValue> { { inputName, ortInput } }, new List<string> { outputName });
-            var result = results.First()!.GetTensorDataAsSpan<float>();
-            // Log.Debug("Neuropolator", "Result:");
-            // for (int i = 0; i < 5; i++) Log.Debug("Neuropolator", string.Format("{0}, ", result[i]));
-            // for (int i = 0; i < 5; i++) Log.Debug("Neuropolator", string.Format("{0}, ", result[i + 5]));
+
+            var result = np.ndarray(out_shape, np.float32, results.First()!.GetTensorDataAsSpan<float>().ToArray());
+
+            // Log.Debug("Neuropolator", "Result: " + result.ToString());
 
             foreach (int step in Enumerable.Range(0, stepsToTake))
             {
-                report.Position += new Vector2(result[step], result[step + out_steps]) / scale;
+                float X = result.flat[step];
+                float Y = result.flat[step + out_steps];
+                report.Position += new Vector2(X, Y) / scale;
             }
 
         }

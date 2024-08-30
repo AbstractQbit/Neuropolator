@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.1" />
+    <PackageReference Include="NumSharp" Version="0.30.0" />
     <PackageReference Include="OpenTabletDriver.Plugin" Version="0.6.4" />
   </ItemGroup>
 
