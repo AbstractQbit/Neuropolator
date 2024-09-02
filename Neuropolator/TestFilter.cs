@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Numerics;
 using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using NumSharp;
 using OpenTabletDriver.Plugin;
 using OpenTabletDriver.Plugin.Attributes;
@@ -17,16 +16,30 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
 {
     public TestFilter() : base()
     {
-        Log.Debug("Neuropolator", inputName);
-        Log.Debug("Neuropolator", outputName);
-        Log.Debug("Neuropolator", ort_session.InputMetadata[inputName].Dimensions.ToString());
+        Log.Debug("Neuropolator", np.array(ort_session.InputMetadata[inputName].Dimensions).ToString());
     }
-    public PipelinePosition Position => PipelinePosition.Pixels;
+    public PipelinePosition Position => PipelinePosition.Raw;
+
+    [Property("Space scale"), DefaultPropertyValue(0.02f)]
+    public float spaceScale { get; set; }
+
+    [Property("Steps"), DefaultPropertyValue(1), ToolTip("Number of steps to take, 0..5")]
+    public int StepsToTake
+    {
+        get { return stepsToTake; }
+        set { stepsToTake = System.Math.Clamp(value, 0, 5); }
+    }
+    private int stepsToTake;
+
+    [Property("Step scale"), DefaultPropertyValue(1.0f)]
+    public float stepScale { get; set; }
+
+    [Property("Debug prediction spam"), DefaultPropertyValue(false)]
+    public bool DebugPredictionSpam { get; set; }
 
     public event Action<IDeviceReport>? Emit;
 
-    private static InferenceSession ort_session = new InferenceSession("./aaaaa1.onnx", new SessionOptions
-    // private static InferenceSession ort_session = new InferenceSession("./dilated3_ar5steps.onnx", new SessionOptions
+    private static InferenceSession ort_session = new InferenceSession("./model.onnx", new SessionOptions
     {
         InterOpNumThreads = 1,
         IntraOpNumThreads = 1,
@@ -46,11 +59,6 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
     private Vector2 previousPosition = Vector2.Zero;
     private HPETDeltaStopwatch reportStopwatch = new HPETDeltaStopwatch();
 
-    private float scale = 0.3f;
-
-    private int stepsToTake = 2;
-
-
 
     public void Consume(IDeviceReport value)
     {
@@ -63,7 +71,7 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
                 previousPosition = report.Position;
             }
 
-            var delta = (report.Position - previousPosition) * scale;
+            var delta = (report.Position - previousPosition) * spaceScale;
             previousPosition = report.Position;
 
             DeltasHist = DeltasHist.roll(-1, axis: 2);
@@ -77,13 +85,14 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
 
             var result = np.ndarray(out_shape, np.float32, results.First()!.GetTensorDataAsSpan<float>().ToArray());
 
-            // Log.Debug("Neuropolator", "Result: " + result.ToString());
+            if (DebugPredictionSpam)
+                Log.Debug("Neuropolator", "Result: " + result.ToString());
 
             foreach (int step in Enumerable.Range(0, stepsToTake))
             {
                 float X = result.flat[step];
                 float Y = result.flat[step + out_steps];
-                report.Position += new Vector2(X, Y) / scale;
+                report.Position += new Vector2(X, Y) * stepScale / spaceScale;
             }
 
         }

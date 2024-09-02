@@ -1,22 +1,13 @@
 import os
 import itertools
-import random
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data.sampler import SubsetRandomSampler
 
 import numpy as np
 import pandas as pd
+import torch
 
-from osrparse import Replay, ReplayEvent, ReplayEventOsu, GameMode
-from typing import Iterator, List, Tuple, Dict, Any, Optional, Union, Iterable, Callable
+from osrparse import Replay, ReplayEventOsu, GameMode
+from typing import List, Iterable
 from tqdm import tqdm
-
-from multiprocessing import Pool
 
 
 def enum_replay_folder(path, full_path=True):
@@ -29,7 +20,7 @@ def enum_replay_folder(path, full_path=True):
 
 
 def read_replay(filename):
-    with open(filename, 'br') as f:
+    with open(filename, "br") as f:
         return Replay.from_file(f)
 
 
@@ -58,11 +49,7 @@ def collapse_stationary(replay: Iterable[ReplayEventOsu]):
         if event.x == last_x and event.y == last_y:
             cumulative_delta += event.time_delta
         else:
-            yield ReplayEventOsu(
-                time_delta=event.time_delta + cumulative_delta,
-                x=last_x,
-                y=last_y,
-                keys=event.keys)
+            yield ReplayEventOsu(time_delta=event.time_delta + cumulative_delta, x=last_x, y=last_y, keys=event.keys)
             last_x, last_y = event.x, event.y
             cumulative_delta = 0
 
@@ -75,10 +62,10 @@ def get_stroke_splits(replay: List[ReplayEventOsu], delta_threshold=25):
     for i in range(len(replay)):
         if replay[i].time_delta > delta_threshold:
             split_points.append(i)
-    split_points.append(len(replay)+1)
+    split_points.append(len(replay) + 1)
     splits = []
-    for i in range(len(split_points)-1):
-        splits.append(replay[split_points[i]:split_points[i+1]])
+    for i in range(len(split_points) - 1):
+        splits.append(replay[split_points[i] : split_points[i + 1]])
     return splits
 
 
@@ -88,7 +75,7 @@ def preprocess_stroke(stroke: Iterable[ReplayEventOsu]):
     """
     positions = np.array([[event.x, event.y] for event in stroke])
     # repeat the ends of the stroke for spline to reach them
-    positions = np.pad(positions, ((1,), (0,)), mode='edge')
+    positions = np.pad(positions, ((1,), (0,)), mode="edge")
 
     deltas = np.array([event.time_delta for event in stroke])
     # first delta of a stroke might be big or negative
@@ -98,7 +85,7 @@ def preprocess_stroke(stroke: Iterable[ReplayEventOsu]):
     # valid small deltas, and this will make velocity hitch on streams
     deltas = np.maximum(deltas, 8)
     # repeat, same as with positions
-    deltas = np.pad(deltas, (1), mode='edge')
+    deltas = np.pad(deltas, (1), mode="edge")
     # 0 to make cumsum start from 0
     deltas[0] = 0
 
@@ -162,9 +149,9 @@ def sample_stroke(timings, positions, rate, offset=0, max_length=2048):
     num_points = int((end - start) * rate / 1000)
 
     t_interp = np.linspace(start, end, num_points)
-    t_ind = np.searchsorted(timings, t_interp, 'right').astype(int)
-    knots_interp = np.take(timings, [t_ind-2, t_ind-1, t_ind, t_ind+1], axis=0, mode='clip')
-    knot_positions = np.take(positions, [t_ind-2, t_ind-1, t_ind, t_ind+1], axis=0)
+    t_ind = np.searchsorted(timings, t_interp, "right").astype(int)
+    knots_interp = np.take(timings, [t_ind - 2, t_ind - 1, t_ind, t_ind + 1], axis=0, mode="clip")
+    knot_positions = np.take(positions, [t_ind - 2, t_ind - 1, t_ind, t_ind + 1], axis=0)
     knot_weights = cubic_barry_goldman_weights(knots_interp, t_interp)
     interp_positions = np.sum(knot_positions * knot_weights[:, :, None], axis=0)
 
@@ -198,6 +185,7 @@ def cubic_barry_goldman_weights_torch(knots, t):
     p3 = a3 * -knots2t / knots32
 
     return torch.stack([p0, p1, p2, p3])
+
 
 # todo fix this
 # @torch.jit.script
@@ -244,7 +232,3 @@ if __name__ == "__main__":
     # with Pool(8) as p:
     #     replay_data = list(tqdm(p.imap(read_replay_data, replay_fns, 64), total=len(replay_fns)))
     # replay_data = [read_replay_data(fn) for fn in tqdm(replay_fns)]
-
-
-
-
