@@ -39,12 +39,14 @@ public class TestFilter : IPositionedPipelineElement<IDeviceReport>//, IDisposab
 
     public event Action<IDeviceReport>? Emit;
 
-    private static InferenceSession ort_session = new InferenceSession("./model.onnx", new SessionOptions
-    {
-        InterOpNumThreads = 1,
-        IntraOpNumThreads = 1,
-        GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
-    });
+    private static InferenceSession ort_session = new InferenceSession(
+        Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)!,
+        "model.onnx"), new SessionOptions
+        {
+            InterOpNumThreads = 1,
+            IntraOpNumThreads = 1,
+            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
+        });
     private static string inputName = ort_session.InputMetadata.Keys.First();
     private static string outputName = ort_session.OutputMetadata.Keys.First();
 
