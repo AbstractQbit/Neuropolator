@@ -1,122 +1,102 @@
-using System;
-using System.Diagnostics;
-using System.Numerics;
-using Microsoft.ML.OnnxRuntime;
-using NumSharp;
 using OpenTabletDriver.Plugin;
 using OpenTabletDriver.Plugin.Attributes;
-using OpenTabletDriver.Plugin.Logging;
 using OpenTabletDriver.Plugin.Output;
 using OpenTabletDriver.Plugin.Tablet;
 using OpenTabletDriver.Plugin.Timing;
+using System.Numerics;
 
 namespace Neuropolator;
 
-// public class Neuropolator : AsyncPositionedPipelineElement<IDeviceReport>, IDisposable
-// {
-//     public override PipelinePosition Position => throw new NotImplementedException();
-
-
-//     protected override void ConsumeState()
-//     {
-//         var timestamp = HPETDeltaStopwatch.RuntimeElapsed.TotalSeconds;
-
-//         throw new NotImplementedException();
-//     }
-
-//     protected override void UpdateState()
-//     {
-//         throw new NotImplementedException();
-//     }
-
-
-
-
-//     private void test()
-//     {
-
-//     }
-
-
-
-//     public new void Dispose()
-//     {
-//         Log.Debug("Neuropolator", "Disposed");
-//     }
-
-//     ~Neuropolator()
-//     {
-//         Dispose();
-//     }
-// }
-
-
-class ReportHistory
+[PluginName("Neuropolator")]
+public class Neuropolator : AsyncPositionedPipelineElement<IDeviceReport>, IDisposable
 {
-    public double cutoff = 10.0; // seconds to keep
+    public override PipelinePosition Position => PipelinePosition.Pixels;
 
-    public List<Vector2> positions = new();
-    public List<double> timings = new();
+    [Property("Delay offset"), Unit("ms"), DefaultPropertyValue(0.0f)]
+    public float DelayOffset { get; set; }
 
-    public void Add(Vector2 position, double now)
+    [Property("Prediction update time"), Unit("ms"), DefaultPropertyValue(3.0f),
+     ToolTip("Duration of a lerp to the updated predictions")]
+    public float PredictionUpdateTime { get; set; }
+
+    [Property("Space scale"), DefaultPropertyValue(0.2f)]
+    public float SpaceScale { get; set; }
+
+    [Property("Reset time"), Unit("ms"), DefaultPropertyValue(50.0f),
+     ToolTip("Time in milliseconds after which to reset the stroke")]
+    public float ResetTime { get; set; }
+
+    public float MinDeltaT = 1 / 200.0f;
+
+    private static ModelRunner _runner = new("model.onnx");
+    private static int _inCtx = _runner.InCtx;
+    private static int[] _inShape = new[] { 2, _inCtx };
+
+    private Vector2 _previousPosition = Vector2.Zero;
+    private HPETDeltaStopwatch _reportStopwatch = new HPETDeltaStopwatch();
+    private HPETDeltaStopwatch _strokeStopwatch = new HPETDeltaStopwatch();
+    private ReportHistory _realHistory = new();
+    private Tuple<ReportHistory, double> _currentPredictionHistory = Tuple.Create(new ReportHistory(), 0.0);
+    private Tuple<ReportHistory, double> _previousPredictionHistory = Tuple.Create(new ReportHistory(), 0.0);
+
+    protected override void ConsumeState()
     {
-        Prune(now);
-        positions.Add(position);
-        timings.Add(now);
+        if (State is IAbsolutePositionReport report)
+        {
+            var position = report.Position;
+            // Log.Debug("Neuropolator", "Received position: " + position);
+
+            // Reset
+            if (_reportStopwatch.Restart().TotalMilliseconds > ResetTime)
+            {
+                _strokeStopwatch.Restart();
+                _previousPosition = position;
+                _realHistory = new();
+            }
+            var now = _strokeStopwatch.Elapsed.TotalSeconds;
+            _realHistory = _realHistory.AddOneAndTrim(position, now);
+
+            var pastDeltas = _realHistory.ResamplePastDeltas(_inCtx, MinDeltaT, out var deltaT);
+            var prediction = _runner.PredictTransposed(pastDeltas);
+
+            Tuple<ReportHistory, double> newPredictionHistory = Tuple.Create(_realHistory.AddPredictions(prediction, deltaT), now);
+            _previousPredictionHistory = _currentPredictionHistory;
+            _currentPredictionHistory = newPredictionHistory;
+        }
+        else OnEmit();
     }
 
-    public void Prune(double now)
+    protected override void UpdateState()
     {
-        var cutoff_time = now - cutoff;
-        while (timings.Count > 0 && timings[0] < cutoff_time)
+        if (State is IAbsolutePositionReport report && PenIsInRange())
         {
-            timings.RemoveAt(0);
-            positions.RemoveAt(0);
+            var now = _strokeStopwatch.Elapsed.TotalSeconds;
+            var (currentPredictionHistory, currentPredictionT) = _currentPredictionHistory;
+            var (previousPredictionHistory, previousPredictionT) = _previousPredictionHistory;
+
+            Vector2 position;
+            if (now - currentPredictionT > PredictionUpdateTime)
+            {
+                position = currentPredictionHistory.SampleSingle(now + DelayOffset);
+            }
+            else
+            {
+                var alpha = (float)((now - previousPredictionT) / (currentPredictionT - previousPredictionT));
+                alpha = Math.Clamp(alpha, 0.0f, 1.0f);
+                var posPrev = previousPredictionHistory.SampleSingle(now + DelayOffset);
+                var posCurr = currentPredictionHistory.SampleSingle(now + DelayOffset);
+                position = Vector2.Lerp(posPrev, posCurr, alpha);
+            }
+
+            report.Position = position;
+            State = report;
+            OnEmit();
         }
     }
 
-
-    // public NDArray positions = np.zeros(new int[] { 0, 2 });
-    // public NDArray timings = np.zeros(new int[] { 0 });
-
-    // public void AddOne(Vector2 position, double now)
-    // {
-    //     var cutoff_time = now - cutoff;
-    //     int cutoff_index = np.searchsorted(timings, cutoff_time);
-
-    //     positions = np.hstack(positions[cutoff_index..], np.array(new float[] { position.X, position.Y }).reshape(1, 2));
-    //     timings = np.hstack(timings[cutoff_index..], np.array(now));
-    // }
-
-    public NDArray ResamplePast(float maxRate, int steps)
+    public new void Dispose()
     {
-        if (timings.Count < 2) return np.zeros(new int[] { steps, 2 });
-
-        var endTime = timings[timings.Count - 1];
-        var penuntTime = timings[timings.Count - 2];
-        var delta = endTime - penuntTime;
-        var rate = Math.Min(maxRate, 1.0f / delta);
-        var startTime = endTime - rate * steps;
-        var t_interp = np.linspace(startTime, endTime, steps);
-
-        // var t_ind = np.searchsorted(timings, t_interp, 'right').astype(int);
-        // np.
-
-        throw new NotImplementedException();
+        Log.Debug("Neuropolator", "Disposed");
     }
-
-
-
-
-}
-
-class SplineSampler
-{
-    // public DenseTensor<float> Sample(double now, float rate, int steps)
-    // {
-    //     var result = new DenseTensor<float>(new int[] { steps, 2 }, reverseStride: false);
-
-
-
-    // }
+    ~Neuropolator() => Dispose();
 }
